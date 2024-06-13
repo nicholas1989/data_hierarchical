@@ -1,59 +1,84 @@
-# install the required packages if they don't already exist
-if (!requireNamespace("factoextra", quietly=TRUE))install.packages("factoextra")
-if (!requireNamespace("cluster", quietly=TRUE))install.packages("cluster")
-
+# Install the required packages if they don't already exist
+if(!requireNamespace("ggplot2", quietly=TRUE)) install.packages("ggplot2")
+if(!requireNamespace("factoextra", quietly = TRUE)) install.packages("factoextra")
+if(!requireNamespace("dplyr", quietly=TRUE)) install.packages("dplyr")
+if(!requireNamespace("readr", quietly=TRUE)) install.packages("readr")
+if(!requireNamespace("cluster", quietly=TRUE)) install.packages("cluster")
 
 # Load the libraries
+library(ggplot2)
 library(factoextra)
+library(dplyr)
+library(readr)
 library(cluster)
 
-# load data
+# Load the data
 winequality_data_set <- read.table('C:/Users/USER/Documents/FH Technikum/R Tutorials/winequality-red.csv', sep=";", header=TRUE)
 
-# remove rows with missing values
-# This line of code is optional. You can decide to write it or not. It all depends on how well you trust the
-# datasets to not have any missing value. In my case, I decided to just write it.
-winequality_data_set <- na.omit(winequality_data_set)
+# We check the structure of the dataset using `str()` function
+str(winequality_data_set)
 
-# scale each variable to have a mean of 0 and sd of 1
+# We scale the dataset so as to standardize the 
 # The scale() function is centering and scaling the data! This is particularly useful when working with algorithm
 # that are sensitive to the scaling of variables 
+scaled_winequality_data_set <- as.data.frame(scale(winequality_data_set))
 
-winequality_data_set_scaled <- scale(winequality_data_set)
+# Perform PCA
+wine_pca <- prcomp(scaled_winequality_data_set, center = TRUE, scale = TRUE)
 
-# view the first 6 rows of the dataset
-# winequality_data_set <- head(winequality_data_set)
-# print(winequality_data_set)
+# Summary of PCA to get the proportion of variance explained by each component
+print(summary(wine_pca))
+
+# Get the eigenvalues
+eigenvalues <- get_eigenvalue(wine_pca)
+print(eigenvalues)
+
+
+# Scree plot to visualize the explained variance
+fviz_eig(wine_pca, addlabels = TRUE, ylim = c(0, 50))
+
+
+# Biplot to visualize PCA results
+fviz_pca_biplot(wine_pca, repel = TRUE,
+                col.var = "contrib", # Color by contributions to the PC
+                gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+                legend.title = "Contrib")
+
+
+# Get the coordinates of individuals
+individuals <- as.data.frame(wine_pca$x)
+print(head(individuals))
+
 
 # Since we don't know beforehand which method will produce the best clusters, we will write a short function
 # that will perform the hierarchical clustering using several different methods.
 # Note that this function calculates the agglomerative coefficient of each method, which is a metric that measures
 # the strength of the clusters. The closer this value is to 1, the stronger the clusters.
-
-# define the linkage methods
-wine_quality <- c("average", "single", "complete", "ward")
-names(wine_quality) <- c("average", "single", "complete", "ward")
+calculate_agglomerative_coefficient <- c("average", "single", "complete", "ward")
+names(calculate_agglomerative_coefficient) <- c("average", "single", "complete", "ward")
 
 # function to compute agglomerative coefficient
 quality_red <- function(x) {
-    agnes(winequality_data_set_scaled, method = x)$ac
+    agnes(individuals, method = x)$ac
 }
 
-# calculate agglomerative coefficient for each clustering linkage method
-agglo_quality <- sapply(wine_quality, quality_red)
-print(agglo_quality)
+# Calculate agglomerative coefficients for each method
+ag_coefficients <- sapply(calculate_agglomerative_coefficient, quality_red)
+print(ag_coefficients)
 
-# Based on the `print(agglo_quality)`, we can see that the Ward's minimum variance method produces the highest
+# Based on the `print(sapply(calculate_agglomerative_coefficient, quality_red))`, we can see that the Ward's minimum variance method produces the highest
 # agglomerative coefficient, thus we will use that as the method for our final hierarchical clustering.
+best_method <- names(which.max(ag_coefficients))
+print(paste("Best method:", best_method))
 
 # perform hierarchical clustering using Ward's minimum variance 
-hierarchical_quality <- agnes(winequality_data_set_scaled, method = "ward")
+hierarchical_quality <- agnes(individuals, method = best_method)
+
+# Convert agnes object to a dendrogram
+hc_dendrogram <- as.dendrogram(hierarchical_quality)
 
 # Plot the dendrogram
-hq <- pltree(hierarchical_quality, cex = 0.6, hang = -1, main = "Dendrogram - Ward's Method")
-
-# Each leaf at the bottom of the dendrogram represents an observation in the original dataset. As we move up
-# the dendrogram from the bottom, observations that are similar to each other are fused together in a branch.
+plot(hc_dendrogram, cex = 0.6, main = "Dendrogram - Ward's Method")
 
 # To determine how many clusters the observations should be grouped in, we would use a metric known as the 
 # `gap statistics`, which compares the total intra-cluster variation for different values of k with their 
@@ -61,7 +86,7 @@ hq <- pltree(hierarchical_quality, cex = 0.6, hang = -1, main = "Dendrogram - Wa
 
 # calculate gap statistic for each number of clusters (up to 10 clusters)
 set.seed(123)
-quality_stats <- clusGap(winequality_data_set_scaled, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+quality_stats <- clusGap(individuals, FUN = hcut, nstart = 25, K.max = 10, B = 50)
 
 # produce plot of clusters vs. gap statistic
 fviz_gap_stat(quality_stats)
@@ -72,18 +97,23 @@ optimal_k <- which.max(gap_df$gap)
 print(paste("Optimal number of clusters:", optimal_k))
 
 # Perform final hierarchical clustering using Ward's method
-final_clust <- hclust(dist(winequality_data_set_scaled, method = "euclidean"), method = "ward.D2")
+final_clust <- hclust(dist(individuals, method = "euclidean"), method = "ward.D2")
 
 # Cut the dendrogram into the optimal number of clusters
 cluster_wine <- cutree(final_clust, k = optimal_k)
 print(table(cluster_wine))
 
-# Append cluster labels to original data
-final_data <- as.data.frame(cbind(winequality_data_set, cluster = cluster_wine))
+# Add cluster results to the PCA data
+individuals$cluster <- factor(cluster_wine)
 
-# Display first six rows of the final data
-head(final_data)
+# Generate a color palette with enough colors for all clusters
+palette_colors <- colorRampPalette(c("#00AFBB", "#E7B800", "#FC4E07"))(optimal_k)
 
-# Find mean values for each cluster
-cluster_means <- aggregate(. ~ cluster, data = final_data, mean)
-print(cluster_means)
+# Visualize the clusters on the PCA plot
+print(ggplot(individuals, aes(PC1, PC2, color = cluster)) +
+  geom_point(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Clusters identified by Hierarchical Clustering on PCA components",
+       x = "Principal Component 1",
+       y = "Principal Component 2") +
+  scale_color_manual(values = palette_colors))
